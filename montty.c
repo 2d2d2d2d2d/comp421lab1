@@ -6,7 +6,7 @@
 
 /* Condition variables to lock */
 static cond_id_t writer[MAX_NUM_TERMINALS];
-static cond_id_t writing;
+static cond_id_t writing[MAX_NUM_TERMINALS];
 
 /* Keep track of the number of writers */
 int num_writers = 0;
@@ -50,7 +50,8 @@ int WriteTerminal(int term, char *buf, int buflen)
 
 	WriteDataRegister(term, writeT_buf[0]);
 
-	CondWait(writing);
+	/* Wait until writing is done */
+	CondWait(writing[term]);
 	num_writers--;
 	CondSignal(writer[term]);
 
@@ -75,6 +76,7 @@ int InitTerminal(int term)
 {
 	Declare_Monitor_Entry_Procedure();
 	writer[term] = CondCreate();
+	writing[term] = CondCreate();
 	return InitHardware(term);
 }
 
@@ -85,7 +87,6 @@ extern
 int InitTerminalDriver()
 {
 	Declare_Monitor_Entry_Procedure();
-	writing = CondCreate();
 	return 0;
 }
 
