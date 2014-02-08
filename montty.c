@@ -166,7 +166,7 @@ void TransmitInterrupt(int term)
 		}
 		/* else the output is done */
 		else {
-			CondSignal(writing);
+			CondSignal(writing[term]);
 		}
 	}
 	
