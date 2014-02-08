@@ -9,23 +9,23 @@ static cond_id_t writer[MAX_NUM_TERMINALS];
 static cond_id_t writing[MAX_NUM_TERMINALS];
 
 /* Keep track of the number of writers */
-int num_writers = 0;
+int num_writers[MAX_NUM_TERMINALS];
 
 /* Counter for the number of characters in echo_buf that needs to be echoed */
-int echo_count = 0;
+int echo_count[MAX_NUM_TERMINALS];
 
 /* Buffer for the echo characters */
-char echo_buf[10]; // is 10 good enough??
+char echo_buf[MAX_NUM_TERMINALS][10]; // is 10 good enough??
 
 /* Boolean to check whether the echo came from ReceiveInterrupt or not */
-bool decrement_echo_count = true;
+bool decrement_echo_count[MAX_NUM_TERMINALS];
 
 /* Counter for the number of characters in WriteTerminal buf */
-int writeT_buf_count = 0;
-int writeT_buf_length = 0;
+int writeT_buf_count[MAX_NUM_TERMINALS];
+int writeT_buf_length[MAX_NUM_TERMINALS];
 
 /* Pointer for the buffer in WriteTerminal */
-char *writeT_buf;
+char *writeT_buf[MAX_NUM_TERMINALS];
 
 /*
  * 
@@ -39,20 +39,20 @@ int WriteTerminal(int term, char *buf, int buflen)
 	 * Check if you can enter. That is, if there isn't anyone 
 	 * else writing on the same terminal.
 	 */
-	while (num_writers > 0)
+	while (num_writers[term] > 0)
 		CondWait(writer[term]);
-	num_writers++;
+	num_writers[term]++;
 
 	/* Output to the screen */
-	writeT_buf = buf;
-	writeT_buf_count = buflen;
-	writeT_buf_length = buflen;
+	writeT_buf[term] = buf;
+	writeT_buf_count[term] = buflen;
+	writeT_buf_length[term] = buflen;
 
-	WriteDataRegister(term, writeT_buf[0]);
+	WriteDataRegister(term, writeT_buf[term][0]);
 
 	/* Wait until writing is done */
 	CondWait(writing[term]);
-	num_writers--;
+	num_writers[term]--;
 	CondSignal(writer[term]);
 
 	return buflen;
@@ -77,6 +77,11 @@ int InitTerminal(int term)
 	Declare_Monitor_Entry_Procedure();
 	writer[term] = CondCreate();
 	writing[term] = CondCreate();
+	num_writers[term] = 0;
+	echo_count[term] = 0;
+	decrement_echo_count[term] = true;
+	writeT_buf_count[term] = 0;
+	writeT_buf_length[term] = 0;
 	return InitHardware(term);
 }
 
@@ -111,18 +116,18 @@ void ReceiveInterrupt(int term)
 	Declare_Monitor_Entry_Procedure();
 
 	char c = ReadDataRegister(term);
-	strncat(echo_buf, &c, 1);
-	echo_count++;
+	strncat(echo_buf[term], &c, 1);
+	echo_count[term]++;
 
 	/* If this is the first character, then start the echo */
-	if (num_writers == 0) {
-		if (echo_count == 1) {
-			WriteDataRegister(term, echo_buf[0]);
-			decrement_echo_count = true;
+	if (num_writers[term] == 0) {
+		if (echo_count[term] == 1) {
+			WriteDataRegister(term, echo_buf[term][0]);
+			decrement_echo_count[term] = true;
 		}
 	} else {
-		if (echo_count == 1) {
-			decrement_echo_count = false;
+		if (echo_count[term] == 1) {
+			decrement_echo_count[term] = false;
 		}
 	}
 
@@ -138,31 +143,31 @@ void TransmitInterrupt(int term)
 	Declare_Monitor_Entry_Procedure();
 	int i;
 
-	printf("echo_count = %d, writeT_buf_count = %d, num_writers = %d\n", 
-		echo_count, writeT_buf_count, num_writers);
+	printf("terminal %d: echo_count = %d, writeT_buf_count = %d, num_writers = %d\n", 
+		term, echo_count[term], writeT_buf_count[term], num_writers[term]);
 	fflush(stdout);
 
-	if (echo_count > 0) {
-		if (decrement_echo_count) {
-			echo_count--;
+	if (echo_count[term] > 0) {
+		if (decrement_echo_count[term]) {
+			echo_count[term]--;
 			/* Move the buffer back */
-			strcpy(echo_buf, &echo_buf[1]);
+			strcpy(echo_buf[term], &echo_buf[term][1]);
 		}
 	}
 
 	/* Keep echoing as long as there is something to echo */
-	if (echo_count > 0) {
-		WriteDataRegister(term, echo_buf[0]);
-		decrement_echo_count = true;
+	if (echo_count[term] > 0) {
+		WriteDataRegister(term, echo_buf[term][0]);
+		decrement_echo_count[term] = true;
 
 	/* Write Terminal stuff */
-	} else if (writeT_buf_count > 0) {
-		writeT_buf_count--;
+	} else if (writeT_buf_count[term] > 0) {
+		writeT_buf_count[term]--;
 	
 		/* Keep writing as long as there is something to write */
-		if (writeT_buf_count > 0) {
-			i = writeT_buf_length - writeT_buf_count;
-			WriteDataRegister(term, writeT_buf[i]);
+		if (writeT_buf_count[term] > 0) {
+			i = writeT_buf_length[term] - writeT_buf_count[term];
+			WriteDataRegister(term, writeT_buf[term][i]);
 		}
 		/* else the output is done */
 		else {
