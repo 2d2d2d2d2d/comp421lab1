@@ -35,6 +35,8 @@ writer1(void *arg)
     int status;
 
     status = WriteTerminal(1, string1, length1);
+    printf("Return from WriteTerminal in writer1\n");
+    fflush(stdout);
     if (status != length1)
 	fprintf(stderr, "Error: writer1 status = %d, length1 = %d\n",
 	    status, length1);
@@ -46,6 +48,8 @@ writer2(void *arg)
     int status;
 
     status = WriteTerminal(1, string2, length2);
+    printf("Return from WriteTerminal in writer2\n");
+    fflush(stdout);
     if (status != length2)
 	fprintf(stderr, "Error: writer2 status = %d, length2 = %d\n",
 	    status, length2);
