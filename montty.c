@@ -7,10 +7,11 @@
 /* Condition variables to lock */
 static cond_id_t writer[MAX_NUM_TERMINALS];
 static cond_id_t writing[MAX_NUM_TERMINALS];
+static cond_id_t reader[MAX_NUM_TERMINALS];
+static cond_id_t toRead[MAX_NUM_TERMINALS];
 static const int ECHO_BUF_SIZE = 1024;
+static const int INPUT_BUF_SIZE = 4096;
 
-/* Keep track of the number of writers */
-int num_writers[MAX_NUM_TERMINALS];
 
 /* Counter for the number of characters in echo_buf that needs to be echoed */
 int echo_count[MAX_NUM_TERMINALS];
@@ -18,11 +19,15 @@ int echo_count[MAX_NUM_TERMINALS];
 /* Buffer for the echo characters */
 char echo_buf[MAX_NUM_TERMINALS][1024];
 
+/* Counter for echo buffer writing and reading index */
 int echo_buf_write_index[MAX_NUM_TERMINALS];
 int echo_buf_read_index[MAX_NUM_TERMINALS];
 
 /* Boolean to check whether the echo came from ReceiveInterrupt or not */
 bool decrement_echo_count[MAX_NUM_TERMINALS];
+
+/* Keep track of the number of writers */
+int num_writers[MAX_NUM_TERMINALS];
 
 /* Counter for the number of characters in WriteTerminal buf */
 int writeT_buf_count[MAX_NUM_TERMINALS];
@@ -30,6 +35,19 @@ int writeT_buf_length[MAX_NUM_TERMINALS];
 
 /* Pointer for the buffer in WriteTerminal */
 char *writeT_buf[MAX_NUM_TERMINALS];
+
+/* Keep track of the number of readers */
+int num_readers[MAX_NUM_TERMINALS];
+
+/* Counter for the number of input that are readable */
+int num_readable_input[MAX_NUM_TERMINALS];
+
+/* Counter for input buffer writing and reading index */
+int input_buf_write_index[MAX_NUM_TERMINALS];
+int input_buf_read_index[MAX_NUM_TERMINALS];
+
+/* Buffer for the input characters */
+char input_buf[MAX_NUM_TERMINALS][4096];
 
 /*
  * 
@@ -69,7 +87,36 @@ extern
 int ReadTerminal(int term, char *buf, int buflen)
 {
 	Declare_Monitor_Entry_Procedure();
-	return 0;
+	char c;
+	int i;
+
+	/* 
+	 * Check if you can enter. That is, if there isn't anyone 
+	 * else reading on the same terminal.
+	 */
+	while (num_readers[term] > 0)
+		CondWait(reader[term]);
+	num_readers[term]++;
+
+	/* Wait until we can read */
+	while (num_readable_input[term] == 0)
+		CondWait(toRead[term]);
+	num_readable_input[term]--;
+
+	/* Read from input */
+	for (i = 0; i < buflen;) {
+		c = input_buf[term][input_buf_read_index[term]];
+		input_buf_read_index[term] = (input_buf_read_index[term] + 1) % INPUT_BUF_SIZE;
+		strncat(buf, &c, 1);
+		i++;
+		if ('\n' == c)
+			break;
+	}
+	
+	num_readers[term]--;
+	CondSignal(reader[term]);
+
+	return i;
 }
 
 /*
@@ -79,8 +126,11 @@ extern
 int InitTerminal(int term)
 {
 	Declare_Monitor_Entry_Procedure();
+	
 	writer[term] = CondCreate();
 	writing[term] = CondCreate();
+	reader[term] = CondCreate();
+	toRead[term] = CondCreate();
 	num_writers[term] = 0;
 	echo_count[term] = 0;
 	echo_buf_write_index[term] = 0;
@@ -88,6 +138,10 @@ int InitTerminal(int term)
 	decrement_echo_count[term] = true;
 	writeT_buf_count[term] = 0;
 	writeT_buf_length[term] = 0;
+	num_readers[term] = 0;
+	num_readable_input[term] = 0;
+	input_buf_write_index[term] = 0;
+	input_buf_read_index[term] = 0;
 
 	return InitHardware(term);
 }
@@ -123,9 +177,20 @@ void ReceiveInterrupt(int term)
 	Declare_Monitor_Entry_Procedure();
 
 	char c = ReadDataRegister(term);
+
+	/* Echo buf update */
 	echo_buf[term][echo_buf_write_index[term]] = c;
 	echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
 	echo_count[term]++;
+
+	/* Input buf update */
+	if ('\r' == c) {
+		num_readable_input[term]++;
+		c = '\n';
+		CondSignal(toRead[term]);
+	}
+	input_buf[term][input_buf_write_index[term]] = c;
+	input_buf_write_index[term] = (input_buf_write_index[term] + 1) % INPUT_BUF_SIZE;
 
 	/* If this is the first character, then start the echo */
 	if (num_writers[term] == 0) {
