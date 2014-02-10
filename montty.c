@@ -9,12 +9,15 @@ static cond_id_t writer[MAX_NUM_TERMINALS];
 static cond_id_t writing[MAX_NUM_TERMINALS];
 static cond_id_t reader[MAX_NUM_TERMINALS];
 static cond_id_t toRead[MAX_NUM_TERMINALS];
+
+/* Constants */
 static const int ECHO_BUF_SIZE = 1024;
 static const int INPUT_BUF_SIZE = 4096;
 
 
 /* Counter for the number of characters in echo_buf that needs to be echoed */
 int echo_count[MAX_NUM_TERMINALS];
+int echo_len[MAX_NUM_TERMINALS];
 
 /* Buffer for the echo characters */
 char echo_buf[MAX_NUM_TERMINALS][1024];
@@ -25,6 +28,9 @@ int echo_buf_read_index[MAX_NUM_TERMINALS];
 
 /* Boolean to check whether the echo came from ReceiveInterrupt or not */
 bool decrement_echo_count[MAX_NUM_TERMINALS];
+
+/* Boolean to check echo should initiate or not */
+bool initiate_echo[MAX_NUM_TERMINALS];
 
 /* Keep track of the number of writers */
 int num_writers[MAX_NUM_TERMINALS];
@@ -71,6 +77,7 @@ int WriteTerminal(int term, char *buf, int buflen)
 	writeT_buf_length[term] = buflen;
 
 	WriteDataRegister(term, writeT_buf[term][0]);
+	decrement_echo_count[term] = false;
 
 	/* Wait until writing is done */
 	CondWait(writing[term]);
@@ -120,7 +127,7 @@ int ReadTerminal(int term, char *buf, int buflen)
 }
 
 /*
- * 
+ * Initialize all the variables for the terminal
  */
 extern
 int InitTerminal(int term)
@@ -133,9 +140,11 @@ int InitTerminal(int term)
 	toRead[term] = CondCreate();
 	num_writers[term] = 0;
 	echo_count[term] = 0;
+	echo_len[term] = 0;
 	echo_buf_write_index[term] = 0;
 	echo_buf_read_index[term] = 0;
 	decrement_echo_count[term] = true;
+	initiate_echo[term] = true;
 	writeT_buf_count[term] = 0;
 	writeT_buf_length[term] = 0;
 	num_readers[term] = 0;
@@ -179,9 +188,30 @@ void ReceiveInterrupt(int term)
 	char c = ReadDataRegister(term);
 
 	/* Echo buf update */
-	echo_buf[term][echo_buf_write_index[term]] = c;
-	echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
-	echo_count[term]++;
+	if ((('\b' == c) || ('\177' == c)) && (0 != echo_len[term])) {
+		printf("backspace was entered!\n");
+		fflush(stdout);
+
+		echo_buf[term][echo_buf_write_index[term]] = '\b';
+		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
+		echo_count[term]++;
+
+		echo_buf[term][echo_buf_write_index[term]] = ' ';
+		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
+		echo_count[term]++;
+
+		echo_buf[term][echo_buf_write_index[term]] = '\b';
+		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
+		echo_count[term]++;
+
+		echo_len[term]--;
+
+	} else if (('\b' != c) && ('\177' != c)) {
+		echo_buf[term][echo_buf_write_index[term]] = c;
+		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
+		echo_count[term]++;
+		echo_len[term]++;
+	}
 
 	/* Input buf update */
 	if ('\r' == c) {
@@ -189,19 +219,36 @@ void ReceiveInterrupt(int term)
 		c = '\n';
 		CondSignal(toRead[term]);
 	}
-	input_buf[term][input_buf_write_index[term]] = c;
-	input_buf_write_index[term] = (input_buf_write_index[term] + 1) % INPUT_BUF_SIZE;
+	if (('\b' == c) || ('\177' == c)) {
+		if ((input_buf_write_index[term] != input_buf_read_index[term]) && ('\n' != input_buf[term][(input_buf_write_index[term] + INPUT_BUF_SIZE - 1) % INPUT_BUF_SIZE])) {
+			input_buf_write_index[term] = (input_buf_write_index[term] + INPUT_BUF_SIZE - 1) % INPUT_BUF_SIZE;
+		}
+	} else {
+		input_buf[term][input_buf_write_index[term]] = c;
+		input_buf_write_index[term] = (input_buf_write_index[term] + 1) % INPUT_BUF_SIZE;
+	}
 
 	/* If this is the first character, then start the echo */
 	if (num_writers[term] == 0) {
-		if (echo_count[term] == 1) {
+		if (initiate_echo[term]) {
+			printf("initiating write out. echo_count = %d\n", echo_count[term]);
+			fflush(stdout);
 			WriteDataRegister(term, echo_buf[term][echo_buf_read_index[term]]);
 			decrement_echo_count[term] = true;
+			initiate_echo[term] = false;
 		}
 	} else {
-		if (echo_count[term] == 1) {
+		if (initiate_echo[term]) {
 			decrement_echo_count[term] = false;
 		}
+	}
+
+	/* Add new line in echo if needed */
+	if ('\n' == c) {
+		echo_buf[term][echo_buf_write_index[term]] = c;
+		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
+		echo_count[term]++;
+		echo_len[term] = 0;
 	}
 
 }
@@ -216,8 +263,7 @@ void TransmitInterrupt(int term)
 	Declare_Monitor_Entry_Procedure();
 	int i;
 
-	printf("terminal %d: echo_count = %d, writeT_buf_count = %d, num_writers = %d\n", 
-		term, echo_count[term], writeT_buf_count[term], num_writers[term]);
+	printf("before terminal %d: echo_count = %d, echo_len = %d, writeT_buf_count = %d, num_writers = %d\n", term, echo_count[term], echo_len[term], writeT_buf_count[term], num_writers[term]);
 	fflush(stdout);
 
 	/* Something to write from echo */
@@ -233,10 +279,12 @@ void TransmitInterrupt(int term)
 	if (echo_count[term] > 0) {
 		WriteDataRegister(term, echo_buf[term][echo_buf_read_index[term]]);
 		decrement_echo_count[term] = true;
+		initiate_echo[term] = false;
 
 	/* WriteTerminal stuff */
 	} else if (writeT_buf_count[term] > 0) {
 		writeT_buf_count[term]--;
+		initiate_echo[term] = true;
 	
 		/* Keep writing as long as there is something to write */
 		if (writeT_buf_count[term] > 0) {
@@ -247,6 +295,8 @@ void TransmitInterrupt(int term)
 		else {
 			CondSignal(writing[term]);
 		}
+	} else {
+		initiate_echo[term] = true;
 	}
 	
 }
