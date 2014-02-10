@@ -7,6 +7,7 @@
 /* Condition variables to lock */
 static cond_id_t writer[MAX_NUM_TERMINALS];
 static cond_id_t writing[MAX_NUM_TERMINALS];
+static const int ECHO_BUF_SIZE = 1024;
 
 /* Keep track of the number of writers */
 int num_writers[MAX_NUM_TERMINALS];
@@ -15,7 +16,10 @@ int num_writers[MAX_NUM_TERMINALS];
 int echo_count[MAX_NUM_TERMINALS];
 
 /* Buffer for the echo characters */
-char echo_buf[MAX_NUM_TERMINALS][10]; // is 10 good enough??
+char echo_buf[MAX_NUM_TERMINALS][1024];
+
+int echo_buf_write_index[MAX_NUM_TERMINALS];
+int echo_buf_read_index[MAX_NUM_TERMINALS];
 
 /* Boolean to check whether the echo came from ReceiveInterrupt or not */
 bool decrement_echo_count[MAX_NUM_TERMINALS];
@@ -79,9 +83,12 @@ int InitTerminal(int term)
 	writing[term] = CondCreate();
 	num_writers[term] = 0;
 	echo_count[term] = 0;
+	echo_buf_write_index[term] = 0;
+	echo_buf_read_index[term] = 0;
 	decrement_echo_count[term] = true;
 	writeT_buf_count[term] = 0;
 	writeT_buf_length[term] = 0;
+
 	return InitHardware(term);
 }
 
@@ -116,13 +123,14 @@ void ReceiveInterrupt(int term)
 	Declare_Monitor_Entry_Procedure();
 
 	char c = ReadDataRegister(term);
-	strncat(echo_buf[term], &c, 1);
+	echo_buf[term][echo_buf_write_index[term]] = c;
+	echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
 	echo_count[term]++;
 
 	/* If this is the first character, then start the echo */
 	if (num_writers[term] == 0) {
 		if (echo_count[term] == 1) {
-			WriteDataRegister(term, echo_buf[term][0]);
+			WriteDataRegister(term, echo_buf[term][echo_buf_read_index[term]]);
 			decrement_echo_count[term] = true;
 		}
 	} else {
@@ -147,20 +155,21 @@ void TransmitInterrupt(int term)
 		term, echo_count[term], writeT_buf_count[term], num_writers[term]);
 	fflush(stdout);
 
+	/* Something to write from echo */
 	if (echo_count[term] > 0) {
+		/* decrement count if and only if the WirteDataRegister was written from echo */
 		if (decrement_echo_count[term]) {
 			echo_count[term]--;
-			/* Move the buffer back */
-			strcpy(echo_buf[term], &echo_buf[term][1]);
+			echo_buf_read_index[term] = (echo_buf_read_index[term] + 1) % ECHO_BUF_SIZE;
 		}
 	}
 
 	/* Keep echoing as long as there is something to echo */
 	if (echo_count[term] > 0) {
-		WriteDataRegister(term, echo_buf[term][0]);
+		WriteDataRegister(term, echo_buf[term][echo_buf_read_index[term]]);
 		decrement_echo_count[term] = true;
 
-	/* Write Terminal stuff */
+	/* WriteTerminal stuff */
 	} else if (writeT_buf_count[term] > 0) {
 		writeT_buf_count[term]--;
 	
