@@ -39,6 +39,9 @@ int num_writers[MAX_NUM_TERMINALS];
 int writeT_buf_count[MAX_NUM_TERMINALS];
 int writeT_buf_length[MAX_NUM_TERMINALS];
 
+/* Keep track of whether a newline was written or not */
+bool writeT_first_newline[MAX_NUM_TERMINALS];
+
 /* Pointer for the buffer in WriteTerminal */
 char *writeT_buf[MAX_NUM_TERMINALS];
 
@@ -76,7 +79,14 @@ int WriteTerminal(int term, char *buf, int buflen)
 	writeT_buf_count[term] = buflen;
 	writeT_buf_length[term] = buflen;
 
-	WriteDataRegister(term, writeT_buf[term][0]);
+	if (writeT_buf[term][0] == '\n') {
+		WriteDataRegister(term, '\r');
+		writeT_buf_count[term]++;
+		writeT_first_newline[term] = false;
+	} else {
+		WriteDataRegister(term, writeT_buf[term][0]);
+		writeT_first_newline[term] = true;
+	}
 	decrement_echo_count[term] = false;
 
 	/* Wait until writing is done */
@@ -147,6 +157,7 @@ int InitTerminal(int term)
 	initiate_echo[term] = true;
 	writeT_buf_count[term] = 0;
 	writeT_buf_length[term] = 0;
+	writeT_first_newline[term] = true;
 	num_readers[term] = 0;
 	num_readable_input[term] = 0;
 	input_buf_write_index[term] = 0;
@@ -289,9 +300,22 @@ void TransmitInterrupt(int term)
 		/* Keep writing as long as there is something to write */
 		if (writeT_buf_count[term] > 0) {
 			i = writeT_buf_length[term] - writeT_buf_count[term];
-			WriteDataRegister(term, writeT_buf[term][i]);
+			
+			if (writeT_buf[term][i] == '\n' && writeT_first_newline[term]) {
+				WriteDataRegister(term, '\r');
+				writeT_buf_count[term]++;
+				writeT_first_newline[term] = false;
+			} else if (writeT_buf[term][i] == '\n') {
+				WriteDataRegister(term, writeT_buf[term][i]);
+				echo_len[term] = 0;
+				writeT_first_newline[term] = true;
+			} else {
+				WriteDataRegister(term, writeT_buf[term][i]);
+				echo_len[term]++;
+				writeT_first_newline[term] = true;
+			}
 		}
-		/* else the output is done */
+		/* Else the output is done */
 		else {
 			CondSignal(writing[term]);
 		}
