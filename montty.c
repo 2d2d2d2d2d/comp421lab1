@@ -4,6 +4,9 @@
 #include <threads.h>
 #include <hardware.h>
 
+/* Prototypes */
+static void beep(int term);
+
 /* Condition variables to lock */
 static cond_id_t writer[MAX_NUM_TERMINALS];
 static cond_id_t writing[MAX_NUM_TERMINALS];
@@ -11,14 +14,14 @@ static cond_id_t reader[MAX_NUM_TERMINALS];
 static cond_id_t toRead[MAX_NUM_TERMINALS];
 
 /* Constants */
-static const int ECHO_BUF_SIZE = 2;
-static const int INPUT_BUF_SIZE = 5;
+static const int ECHO_BUF_SIZE = 1024; // Must be at least 3
+static const int INPUT_BUF_SIZE = 4096;
 
 /* Buffer for the echo characters */
-char echo_buf[MAX_NUM_TERMINALS][2];
+char echo_buf[MAX_NUM_TERMINALS][1024]; // Must be at least 3
 
 /* Buffer for the input characters */
-char input_buf[MAX_NUM_TERMINALS][5];
+char input_buf[MAX_NUM_TERMINALS][4];
 
 /* Counter for the number of characters in echo_buf that needs to be echoed */
 int echo_count[MAX_NUM_TERMINALS];
@@ -68,7 +71,7 @@ int input_buf_read_index[MAX_NUM_TERMINALS];
 int input_buf_count[MAX_NUM_TERMINALS];
 
 /*
- * 
+ * Writes given buffer to the Terminal
  */
 extern
 int WriteTerminal(int term, char *buf, int buflen)
@@ -240,60 +243,77 @@ void ReceiveInterrupt(int term)
 	} else if (('\b' != c) && ('\177' != c)) {
 
 		/* Echo only if there's room, else drop the character. Notice, this won't even go into the input buffer */
-		if ((ECHO_BUF_SIZE - echo_count[term]) > 0) {
+		if ((ECHO_BUF_SIZE - echo_count[term]) > 3) { // Leave room for back spacing.
 			echo_buf[term][echo_buf_write_index[term]] = c;
 			echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
 			echo_count[term]++;
 			screen_len[term]++;
+		} else if ((ECHO_BUF_SIZE - echo_count[term]) == 3){ // Beep if no room
+			beep(term);
 		}
 	}
 
-	/* Input buf update */
+	/* Character processing */
 	if ('\r' == c) {
-		num_readable_input[term]++;
 		c = '\n';
-		CondSignal(toRead[term]); // Signal even if the input buffer is full and \n character is dropped
 	}
+
+	/* Input buf update */
 	if (('\b' == c) || ('\177' == c)) {
-		if ((input_buf_write_index[term] != input_buf_read_index[term]) && ('\n' != input_buf[term][(input_buf_write_index[term] + INPUT_BUF_SIZE - 1) % INPUT_BUF_SIZE])) {
+		if ((input_buf_count[term] > 0) && ('\n' != input_buf[term][(input_buf_write_index[term] + INPUT_BUF_SIZE - 1) % INPUT_BUF_SIZE])) {
 			input_buf_write_index[term] = (input_buf_write_index[term] + INPUT_BUF_SIZE - 1) % INPUT_BUF_SIZE;
 			input_buf_count[term]--;
 		}
 	} else {
-		if ((INPUT_BUF_SIZE - input_buf_count[term]) > 1) {
+		if ((INPUT_BUF_SIZE - input_buf_count[term]) > 0) {
 			input_buf[term][input_buf_write_index[term]] = c;
 			input_buf_write_index[term] = (input_buf_write_index[term] + 1) % INPUT_BUF_SIZE;
 			input_buf_count[term]++;
-		} else { // Put a new line at the very end of the buffer 
-			input_buf[term][INPUT_BUF_SIZE - 1] = '\n';
-			input_buf_write_index[term] = 0;
-			input_buf_count[term] = INPUT_BUF_SIZE;
+			if ('\n' == c) {
+				num_readable_input[term]++;
+				CondSignal(toRead[term]);
+			}
+		} else if ((ECHO_BUF_SIZE - echo_count[term]) > 3) { // Beep if you're typing when nothing is going in
+			beep(term);
 		}
 	}
 
 	/* If this is the first character, then start the echo */
 	if (num_writers[term] == 0) {
-		if (initiate_echo[term]) {
+		if (initiate_echo[term] && (echo_count[term] > 0)) {
 			WriteDataRegister(term, echo_buf[term][echo_buf_read_index[term]]);
 			decrement_echo_count[term] = true;
 			initiate_echo[term] = false;
 		}
 	} else {
-		if (initiate_echo[term]) {
+		if (initiate_echo[term] && (echo_count[term] > 0)) {
 			decrement_echo_count[term] = false;
 		}
 	}
 
 	/* Add new line in echo if needed */
 	if ('\n' == c) {
-		echo_buf[term][echo_buf_write_index[term]] = c;
-		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
-		echo_count[term]++;
-		screen_len[term] = 0;
+		if ((ECHO_BUF_SIZE - echo_count[term]) >= 3) {
+			echo_buf[term][echo_buf_write_index[term]] = c;
+			echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
+			echo_count[term]++;
+			screen_len[term] = 0;
+		}
 	}
 
 }
 
+/*
+ * Write Beep on Terminal
+ */
+static
+void beep(int term) {
+	if ((ECHO_BUF_SIZE - echo_count[term]) > 0) {
+		echo_buf[term][echo_buf_write_index[term]] = '\7';
+		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
+		echo_count[term]++;
+	}
+}
 
 
 /*
@@ -306,7 +326,7 @@ void TransmitInterrupt(int term)
 	Declare_Monitor_Entry_Procedure();
 	int i;
 
-	printf("before terminal %d: echo_count = %d, screen_len = %d, writeT_buf_count = %d, num_writers = %d\n", term, echo_count[term], screen_len[term], writeT_buf_count[term], num_writers[term]);
+	printf("terminal %d: echo_count = %d, echo_write = %d, echo_read = %d, [%d, %d, %d]\n", term, echo_count[term], echo_buf_write_index[term], echo_buf_read_index[term], echo_buf[term][0], echo_buf[term][1], echo_buf[term][2]);
 	fflush(stdout);
 
 	/* Something to write from echo */
