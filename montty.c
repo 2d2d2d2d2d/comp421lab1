@@ -17,7 +17,9 @@ static const int INPUT_BUF_SIZE = 4096;
 
 /* Counter for the number of characters in echo_buf that needs to be echoed */
 int echo_count[MAX_NUM_TERMINALS];
-int echo_len[MAX_NUM_TERMINALS];
+
+/* Counter for actual number of character on screen */
+int screen_len[MAX_NUM_TERMINALS];
 
 /* Buffer for the echo characters */
 char echo_buf[MAX_NUM_TERMINALS][1024];
@@ -40,6 +42,8 @@ int num_waiting[MAX_NUM_TERMINALS];
 
 /* Counter for the number of characters in WriteTerminal buf */
 int writeT_buf_count[MAX_NUM_TERMINALS];
+
+/* The length of the WriteTerminal buffer */
 int writeT_buf_length[MAX_NUM_TERMINALS];
 
 /* Keep track of whether a newline was written or not */
@@ -117,8 +121,9 @@ int ReadTerminal(int term, char *buf, int buflen)
 	 * Check if you can enter. That is, if there isn't anyone 
 	 * else reading on the same terminal.
 	 */
-	if (num_readers[term] > 0)
+	if (num_readers[term] > 0) {
 		CondWait(reader[term]);
+	}
 	num_readers[term]++;
 
 	/* Wait until we can read */
@@ -135,6 +140,9 @@ int ReadTerminal(int term, char *buf, int buflen)
 		if ('\n' == c)
 			break;
 	}
+
+	if ('\n' != c)
+		num_readable_input[term]++;
 	
 	num_readers[term]--;
 	CondSignal(reader[term]);
@@ -157,7 +165,7 @@ int InitTerminal(int term)
 	num_writers[term] = 0;
 	num_waiting[term] = 0;
 	echo_count[term] = 0;
-	echo_len[term] = 0;
+	screen_len[term] = 0;
 	echo_buf_write_index[term] = 0;
 	echo_buf_read_index[term] = 0;
 	decrement_echo_count[term] = true;
@@ -206,7 +214,7 @@ void ReceiveInterrupt(int term)
 	char c = ReadDataRegister(term);
 
 	/* Echo buf update */
-	if ((('\b' == c) || ('\177' == c)) && (0 != echo_len[term])) {
+	if ((('\b' == c) || ('\177' == c)) && (0 != screen_len[term])) {
 		echo_buf[term][echo_buf_write_index[term]] = '\b';
 		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
 		echo_count[term]++;
@@ -219,13 +227,13 @@ void ReceiveInterrupt(int term)
 		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
 		echo_count[term]++;
 
-		echo_len[term]--;
+		screen_len[term]--;
 
 	} else if (('\b' != c) && ('\177' != c)) {
 		echo_buf[term][echo_buf_write_index[term]] = c;
 		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
 		echo_count[term]++;
-		echo_len[term]++;
+		screen_len[term]++;
 	}
 
 	/* Input buf update */
@@ -261,7 +269,7 @@ void ReceiveInterrupt(int term)
 		echo_buf[term][echo_buf_write_index[term]] = c;
 		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
 		echo_count[term]++;
-		echo_len[term] = 0;
+		screen_len[term] = 0;
 	}
 
 }
@@ -276,7 +284,7 @@ void TransmitInterrupt(int term)
 	Declare_Monitor_Entry_Procedure();
 	int i;
 
-	//printf("before terminal %d: echo_count = %d, echo_len = %d, writeT_buf_count = %d, num_writers = %d\n", term, echo_count[term], echo_len[term], writeT_buf_count[term], num_writers[term]);
+	//printf("before terminal %d: echo_count = %d, screen_len = %d, writeT_buf_count = %d, num_writers = %d\n", term, echo_count[term], screen_len[term], writeT_buf_count[term], num_writers[term]);
 	//fflush(stdout);
 
 	/* Something to write from echo */
@@ -309,11 +317,11 @@ void TransmitInterrupt(int term)
 				writeT_first_newline[term] = false;
 			} else if (writeT_buf[term][i] == '\n') {
 				WriteDataRegister(term, writeT_buf[term][i]);
-				echo_len[term] = 0;
+				screen_len[term] = 0;
 				writeT_first_newline[term] = true;
 			} else {
 				WriteDataRegister(term, writeT_buf[term][i]);
-				echo_len[term]++;
+				screen_len[term]++;
 				writeT_first_newline[term] = true;
 			}
 		}
