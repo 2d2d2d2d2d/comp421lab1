@@ -21,7 +21,10 @@ static const int INPUT_BUF_SIZE = 4096;
 char echo_buf[MAX_NUM_TERMINALS][1024]; // Must be at least 3
 
 /* Buffer for the input characters */
-char input_buf[MAX_NUM_TERMINALS][4];
+char input_buf[MAX_NUM_TERMINALS][4096];
+
+/* To keep track of open terminals */
+int open_terminal[MAX_NUM_TERMINALS];
 
 /* Counter for the number of characters in echo_buf that needs to be echoed */
 int echo_count[MAX_NUM_TERMINALS];
@@ -78,6 +81,11 @@ int WriteTerminal(int term, char *buf, int buflen)
 {
 	Declare_Monitor_Entry_Procedure();
 
+	/* Error Handling */
+	if ((buflen < 1) || (open_terminal[term] < 0) ||
+		(term < 0) || (term > MAX_NUM_TERMINALS - 1))
+		return -1;
+
 	/* 
 	 * Check if you can enter. That is, if there isn't anyone 
 	 * else writing on the same terminal.
@@ -122,6 +130,11 @@ int ReadTerminal(int term, char *buf, int buflen)
 	char c;
 	int i;
 
+	/* Error Handling */
+	if ((buflen < 1) || (buflen > INPUT_BUF_SIZE) || (open_terminal[term] < 0) || 
+		(term < 0) || (term > MAX_NUM_TERMINALS - 1))
+		return -1;
+
 	/* 
 	 * Check if you can enter. That is, if there isn't anyone 
 	 * else reading on the same terminal.
@@ -163,29 +176,38 @@ extern
 int InitTerminal(int term)
 {
 	Declare_Monitor_Entry_Procedure();
-	
-	writer[term] = CondCreate();
-	writing[term] = CondCreate();
-	reader[term] = CondCreate();
-	toRead[term] = CondCreate();
-	num_writers[term] = 0;
-	num_waiting[term] = 0;
-	echo_count[term] = 0;
-	input_buf_count[term] = 0;
-	screen_len[term] = 0;
-	echo_buf_write_index[term] = 0;
-	echo_buf_read_index[term] = 0;
-	decrement_echo_count[term] = true;
-	initiate_echo[term] = true;
-	writeT_buf_count[term] = 0;
-	writeT_buf_length[term] = 0;
-	writeT_first_newline[term] = true;
-	num_readers[term] = 0;
-	num_readable_input[term] = 0;
-	input_buf_write_index[term] = 0;
-	input_buf_read_index[term] = 0;
 
-	return InitHardware(term);
+	/* Error Handling */
+	if ((term < 0) || (term > MAX_NUM_TERMINALS - 1) || (open_terminal[term] == 0))
+		return -1;
+
+	/* Try initializing hardware */
+	open_terminal[term] = InitHardware(term);
+
+	if (open_terminal[term] == 0) {
+		writer[term] = CondCreate();
+		writing[term] = CondCreate();
+		reader[term] = CondCreate();
+		toRead[term] = CondCreate();
+		num_writers[term] = 0;
+		num_waiting[term] = 0;
+		echo_count[term] = 0;
+		input_buf_count[term] = 0;
+		screen_len[term] = 0;
+		echo_buf_write_index[term] = 0;
+		echo_buf_read_index[term] = 0;
+		decrement_echo_count[term] = true;
+		initiate_echo[term] = true;
+		writeT_buf_count[term] = 0;
+		writeT_buf_length[term] = 0;
+		writeT_first_newline[term] = true;
+		num_readers[term] = 0;
+		num_readable_input[term] = 0;
+		input_buf_write_index[term] = 0;
+		input_buf_read_index[term] = 0;
+	}
+
+	return open_terminal[term];
 }
 
 /*
@@ -195,6 +217,10 @@ extern
 int InitTerminalDriver()
 {
 	Declare_Monitor_Entry_Procedure();
+	int i;
+	for (i = 0; i < MAX_NUM_TERMINALS; i++)
+		open_terminal[i] = -1;
+
 	return 0;
 }
 
@@ -326,8 +352,8 @@ void TransmitInterrupt(int term)
 	Declare_Monitor_Entry_Procedure();
 	int i;
 
-	printf("terminal %d: echo_count = %d, echo_write = %d, echo_read = %d, [%d, %d, %d]\n", term, echo_count[term], echo_buf_write_index[term], echo_buf_read_index[term], echo_buf[term][0], echo_buf[term][1], echo_buf[term][2]);
-	fflush(stdout);
+	//printf("terminal %d: echo_count = %d, echo_write = %d, echo_read = %d, [%d, %d, %d]\n", term, echo_count[term], echo_buf_write_index[term], echo_buf_read_index[term], echo_buf[term][0], echo_buf[term][1], echo_buf[term][2]);
+	//fflush(stdout);
 
 	/* Something to write from echo */
 	if (echo_count[term] > 0) {
