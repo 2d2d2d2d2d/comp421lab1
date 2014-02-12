@@ -35,6 +35,9 @@ bool initiate_echo[MAX_NUM_TERMINALS];
 /* Keep track of the number of writers */
 int num_writers[MAX_NUM_TERMINALS];
 
+/* Keep track of the number of waiting writers */
+int num_waiting[MAX_NUM_TERMINALS];
+
 /* Counter for the number of characters in WriteTerminal buf */
 int writeT_buf_count[MAX_NUM_TERMINALS];
 int writeT_buf_length[MAX_NUM_TERMINALS];
@@ -70,9 +73,12 @@ int WriteTerminal(int term, char *buf, int buflen)
 	 * Check if you can enter. That is, if there isn't anyone 
 	 * else writing on the same terminal.
 	 */
-	while (num_writers[term] > 0)
+	if ((num_writers[term] > 0) || num_waiting[term] > 0) {
+		num_waiting[term]++;
 		CondWait(writer[term]);
+	}
 	num_writers[term]++;
+	num_waiting[term]--;
 
 	/* Output to the screen */
 	writeT_buf[term] = buf;
@@ -111,12 +117,12 @@ int ReadTerminal(int term, char *buf, int buflen)
 	 * Check if you can enter. That is, if there isn't anyone 
 	 * else reading on the same terminal.
 	 */
-	while (num_readers[term] > 0)
+	if (num_readers[term] > 0)
 		CondWait(reader[term]);
 	num_readers[term]++;
 
 	/* Wait until we can read */
-	while (num_readable_input[term] == 0)
+	if (num_readable_input[term] == 0)
 		CondWait(toRead[term]);
 	num_readable_input[term]--;
 
@@ -149,6 +155,7 @@ int InitTerminal(int term)
 	reader[term] = CondCreate();
 	toRead[term] = CondCreate();
 	num_writers[term] = 0;
+	num_waiting[term] = 0;
 	echo_count[term] = 0;
 	echo_len[term] = 0;
 	echo_buf_write_index[term] = 0;
@@ -200,9 +207,6 @@ void ReceiveInterrupt(int term)
 
 	/* Echo buf update */
 	if ((('\b' == c) || ('\177' == c)) && (0 != echo_len[term])) {
-		printf("backspace was entered!\n");
-		fflush(stdout);
-
 		echo_buf[term][echo_buf_write_index[term]] = '\b';
 		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
 		echo_count[term]++;
@@ -242,8 +246,6 @@ void ReceiveInterrupt(int term)
 	/* If this is the first character, then start the echo */
 	if (num_writers[term] == 0) {
 		if (initiate_echo[term]) {
-			printf("initiating write out. echo_count = %d\n", echo_count[term]);
-			fflush(stdout);
 			WriteDataRegister(term, echo_buf[term][echo_buf_read_index[term]]);
 			decrement_echo_count[term] = true;
 			initiate_echo[term] = false;
@@ -274,8 +276,8 @@ void TransmitInterrupt(int term)
 	Declare_Monitor_Entry_Procedure();
 	int i;
 
-	printf("before terminal %d: echo_count = %d, echo_len = %d, writeT_buf_count = %d, num_writers = %d\n", term, echo_count[term], echo_len[term], writeT_buf_count[term], num_writers[term]);
-	fflush(stdout);
+	//printf("before terminal %d: echo_count = %d, echo_len = %d, writeT_buf_count = %d, num_writers = %d\n", term, echo_count[term], echo_len[term], writeT_buf_count[term], num_writers[term]);
+	//fflush(stdout);
 
 	/* Something to write from echo */
 	if (echo_count[term] > 0) {

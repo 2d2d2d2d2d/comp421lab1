@@ -5,7 +5,7 @@
 
 void writer(void *);
 
-char string[] = "\n\n\n1234567890\n987654321\n";
+char string[] = "\n\n\n1234567890987654321";
 int length = sizeof(string) - 1;
 
 int main(int argc, char **argv)
@@ -30,8 +30,6 @@ void
 writer(void *arg)
 {
     int status;
-
-    while(1)
-        status = WriteTerminal(1, string, length);
+    status = WriteTerminal(1, string, length);
     
 }

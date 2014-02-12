@@ -42,7 +42,7 @@ LANG = gcc
 #	terminal device driver named \verb|montty.o|.  Your
 #	compiled driver *must* be named \verb|montty.o|.
 #
-TEST = test0 test1 test2 test3 test4 test5 test6 test7
+TEST = test0 test1 test2 test3 test4 test5 test6 test7 test8
 ALL = $(MONTTY) $(TEST)
 
 #
