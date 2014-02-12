@@ -11,18 +11,20 @@ static cond_id_t reader[MAX_NUM_TERMINALS];
 static cond_id_t toRead[MAX_NUM_TERMINALS];
 
 /* Constants */
-static const int ECHO_BUF_SIZE = 1024;
-static const int INPUT_BUF_SIZE = 4096;
+static const int ECHO_BUF_SIZE = 2;
+static const int INPUT_BUF_SIZE = 5;
 
+/* Buffer for the echo characters */
+char echo_buf[MAX_NUM_TERMINALS][2];
+
+/* Buffer for the input characters */
+char input_buf[MAX_NUM_TERMINALS][5];
 
 /* Counter for the number of characters in echo_buf that needs to be echoed */
 int echo_count[MAX_NUM_TERMINALS];
 
 /* Counter for actual number of character on screen */
 int screen_len[MAX_NUM_TERMINALS];
-
-/* Buffer for the echo characters */
-char echo_buf[MAX_NUM_TERMINALS][1024];
 
 /* Counter for echo buffer writing and reading index */
 int echo_buf_write_index[MAX_NUM_TERMINALS];
@@ -62,8 +64,8 @@ int num_readable_input[MAX_NUM_TERMINALS];
 int input_buf_write_index[MAX_NUM_TERMINALS];
 int input_buf_read_index[MAX_NUM_TERMINALS];
 
-/* Buffer for the input characters */
-char input_buf[MAX_NUM_TERMINALS][4096];
+/* Counter for the number of characters in input_buf */
+int input_buf_count[MAX_NUM_TERMINALS];
 
 /*
  * 
@@ -137,6 +139,7 @@ int ReadTerminal(int term, char *buf, int buflen)
 		input_buf_read_index[term] = (input_buf_read_index[term] + 1) % INPUT_BUF_SIZE;
 		strncat(buf, &c, 1);
 		i++;
+		input_buf_count[term]--;
 		if ('\n' == c)
 			break;
 	}
@@ -165,6 +168,7 @@ int InitTerminal(int term)
 	num_writers[term] = 0;
 	num_waiting[term] = 0;
 	echo_count[term] = 0;
+	input_buf_count[term] = 0;
 	screen_len[term] = 0;
 	echo_buf_write_index[term] = 0;
 	echo_buf_read_index[term] = 0;
@@ -215,40 +219,56 @@ void ReceiveInterrupt(int term)
 
 	/* Echo buf update */
 	if ((('\b' == c) || ('\177' == c)) && (0 != screen_len[term])) {
-		echo_buf[term][echo_buf_write_index[term]] = '\b';
-		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
-		echo_count[term]++;
 
-		echo_buf[term][echo_buf_write_index[term]] = ' ';
-		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
-		echo_count[term]++;
+		/* Back space only if there's room, else drop the back space. Notice, this won't affect the input buffer */
+		if ((ECHO_BUF_SIZE - echo_count[term]) >= 3) {
+			echo_buf[term][echo_buf_write_index[term]] = '\b';
+			echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
+			echo_count[term]++;
 
-		echo_buf[term][echo_buf_write_index[term]] = '\b';
-		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
-		echo_count[term]++;
+			echo_buf[term][echo_buf_write_index[term]] = ' ';
+			echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
+			echo_count[term]++;
 
-		screen_len[term]--;
+			echo_buf[term][echo_buf_write_index[term]] = '\b';
+			echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
+			echo_count[term]++;
+
+			screen_len[term]--;
+		}
 
 	} else if (('\b' != c) && ('\177' != c)) {
-		echo_buf[term][echo_buf_write_index[term]] = c;
-		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
-		echo_count[term]++;
-		screen_len[term]++;
+
+		/* Echo only if there's room, else drop the character. Notice, this won't even go into the input buffer */
+		if ((ECHO_BUF_SIZE - echo_count[term]) > 0) {
+			echo_buf[term][echo_buf_write_index[term]] = c;
+			echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
+			echo_count[term]++;
+			screen_len[term]++;
+		}
 	}
 
 	/* Input buf update */
 	if ('\r' == c) {
 		num_readable_input[term]++;
 		c = '\n';
-		CondSignal(toRead[term]);
+		CondSignal(toRead[term]); // Signal even if the input buffer is full and \n character is dropped
 	}
 	if (('\b' == c) || ('\177' == c)) {
 		if ((input_buf_write_index[term] != input_buf_read_index[term]) && ('\n' != input_buf[term][(input_buf_write_index[term] + INPUT_BUF_SIZE - 1) % INPUT_BUF_SIZE])) {
 			input_buf_write_index[term] = (input_buf_write_index[term] + INPUT_BUF_SIZE - 1) % INPUT_BUF_SIZE;
+			input_buf_count[term]--;
 		}
 	} else {
-		input_buf[term][input_buf_write_index[term]] = c;
-		input_buf_write_index[term] = (input_buf_write_index[term] + 1) % INPUT_BUF_SIZE;
+		if ((INPUT_BUF_SIZE - input_buf_count[term]) > 1) {
+			input_buf[term][input_buf_write_index[term]] = c;
+			input_buf_write_index[term] = (input_buf_write_index[term] + 1) % INPUT_BUF_SIZE;
+			input_buf_count[term]++;
+		} else { // Put a new line at the very end of the buffer 
+			input_buf[term][INPUT_BUF_SIZE - 1] = '\n';
+			input_buf_write_index[term] = 0;
+			input_buf_count[term] = INPUT_BUF_SIZE;
+		}
 	}
 
 	/* If this is the first character, then start the echo */
@@ -274,6 +294,8 @@ void ReceiveInterrupt(int term)
 
 }
 
+
+
 /*
  * Called by the hardware once each character is written to the 
  * display.
@@ -284,8 +306,8 @@ void TransmitInterrupt(int term)
 	Declare_Monitor_Entry_Procedure();
 	int i;
 
-	//printf("before terminal %d: echo_count = %d, screen_len = %d, writeT_buf_count = %d, num_writers = %d\n", term, echo_count[term], screen_len[term], writeT_buf_count[term], num_writers[term]);
-	//fflush(stdout);
+	printf("before terminal %d: echo_count = %d, screen_len = %d, writeT_buf_count = %d, num_writers = %d\n", term, echo_count[term], screen_len[term], writeT_buf_count[term], num_writers[term]);
+	fflush(stdout);
 
 	/* Something to write from echo */
 	if (echo_count[term] > 0) {
