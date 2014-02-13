@@ -3,25 +3,24 @@
 #include <string.h>
 #include <threads.h>
 #include <hardware.h>
+#include <terminals.h>
 
-/* Prototypes */
-static void beep(int term);
+/* Constants */
+#define ECHO_BUF_SIZE 1024 // Must be at least 3
+#define INPUT_BUF_SIZE 4096
 
 /* Condition variables to lock */
 static cond_id_t writer[MAX_NUM_TERMINALS];
 static cond_id_t writing[MAX_NUM_TERMINALS];
+static cond_id_t busy_echo[MAX_NUM_TERMINALS];
 static cond_id_t reader[MAX_NUM_TERMINALS];
 static cond_id_t toRead[MAX_NUM_TERMINALS];
 
-/* Constants */
-static const int ECHO_BUF_SIZE = 1024; // Must be at least 3
-static const int INPUT_BUF_SIZE = 4096;
-
 /* Buffer for the echo characters */
-char echo_buf[MAX_NUM_TERMINALS][1024]; // Must be at least 3
+char echo_buf[MAX_NUM_TERMINALS][ECHO_BUF_SIZE]; // Must be at least 3
 
 /* Buffer for the input characters */
-char input_buf[MAX_NUM_TERMINALS][4096];
+char input_buf[MAX_NUM_TERMINALS][INPUT_BUF_SIZE];
 
 /* To keep track of open terminals */
 int open_terminal[MAX_NUM_TERMINALS];
@@ -73,6 +72,9 @@ int input_buf_read_index[MAX_NUM_TERMINALS];
 /* Counter for the number of characters in input_buf */
 int input_buf_count[MAX_NUM_TERMINALS];
 
+/* Array for TerminalDriverStatistics */
+struct termstat statistics[MAX_NUM_TERMINALS];
+
 /*
  * Writes given buffer to the Terminal
  */
@@ -93,9 +95,15 @@ int WriteTerminal(int term, char *buf, int buflen)
 	if ((num_writers[term] > 0) || num_waiting[term] > 0) {
 		num_waiting[term]++;
 		CondWait(writer[term]);
+	} else {
+		num_waiting[term]++;
 	}
 	num_writers[term]++;
 	num_waiting[term]--;
+
+	/* Wait until echo is done */
+	if (echo_count[term] > 0)
+		CondWait(busy_echo[term]);
 
 	/* Output to the screen */
 	writeT_buf[term] = buf;
@@ -105,6 +113,7 @@ int WriteTerminal(int term, char *buf, int buflen)
 	if (writeT_buf[term][0] == '\n') {
 		WriteDataRegister(term, '\r');
 		writeT_buf_count[term]++;
+		statistics[term].user_in--;
 		writeT_first_newline[term] = false;
 	} else {
 		WriteDataRegister(term, writeT_buf[term][0]);
@@ -154,6 +163,8 @@ int ReadTerminal(int term, char *buf, int buflen)
 		c = input_buf[term][input_buf_read_index[term]];
 		input_buf_read_index[term] = (input_buf_read_index[term] + 1) % INPUT_BUF_SIZE;
 		strncat(buf, &c, 1);
+		/* Statistics since the boundary has been crossed */
+		statistics[term].user_out++;
 		i++;
 		input_buf_count[term]--;
 		if ('\n' == c)
@@ -185,12 +196,21 @@ int InitTerminal(int term)
 	open_terminal[term] = InitHardware(term);
 
 	if (open_terminal[term] == 0) {
+		// Condition variables
 		writer[term] = CondCreate();
 		writing[term] = CondCreate();
+		busy_echo[term] = CondCreate();
 		reader[term] = CondCreate();
 		toRead[term] = CondCreate();
+
+		// WriteTerminal
 		num_writers[term] = 0;
 		num_waiting[term] = 0;
+		writeT_buf_count[term] = 0;
+		writeT_buf_length[term] = 0;
+		writeT_first_newline[term] = true;
+
+		// Echo
 		echo_count[term] = 0;
 		input_buf_count[term] = 0;
 		screen_len[term] = 0;
@@ -198,13 +218,18 @@ int InitTerminal(int term)
 		echo_buf_read_index[term] = 0;
 		decrement_echo_count[term] = true;
 		initiate_echo[term] = true;
-		writeT_buf_count[term] = 0;
-		writeT_buf_length[term] = 0;
-		writeT_first_newline[term] = true;
+		
+		// ReadTerminal
 		num_readers[term] = 0;
 		num_readable_input[term] = 0;
 		input_buf_write_index[term] = 0;
 		input_buf_read_index[term] = 0;
+
+		// Statistics
+		statistics[term].tty_in = 0;
+		statistics[term].tty_out = 0;
+		statistics[term].user_in = 0;
+		statistics[term].user_out = 0;
 	}
 
 	return open_terminal[term];
@@ -218,19 +243,33 @@ int InitTerminalDriver()
 {
 	Declare_Monitor_Entry_Procedure();
 	int i;
-	for (i = 0; i < MAX_NUM_TERMINALS; i++)
+	for (i = 0; i < MAX_NUM_TERMINALS; i++) {
 		open_terminal[i] = -1;
+		statistics[i].tty_in = -1;
+		statistics[i].tty_out = -1;
+		statistics[i].user_in = -1;
+		statistics[i].user_out = -1;
+	}
 
 	return 0;
 }
 
 /*
- * 
+ * Copies internal statistics to the passed statistics pointer
  */
 extern
 int TerminalDriverStatistics(struct termstat *stats)
 {
 	Declare_Monitor_Entry_Procedure();
+	int i;
+
+	for (i = 0; i < MAX_NUM_TERMINALS; i++) {
+		stats[i].tty_in = statistics[i].tty_in;
+		stats[i].tty_out = statistics[i].tty_out;
+		stats[i].user_in = statistics[i].user_in;
+		stats[i].user_out = statistics[i].user_out;
+	}
+
 	return 0;
 }
 
@@ -244,7 +283,9 @@ void ReceiveInterrupt(int term)
 {
 	Declare_Monitor_Entry_Procedure();
 
+	/* Read from register */
 	char c = ReadDataRegister(term);
+	statistics[term].tty_in++;
 
 	/* Echo buf update */
 	if ((('\b' == c) || ('\177' == c)) && (0 != screen_len[term])) {
@@ -275,7 +316,11 @@ void ReceiveInterrupt(int term)
 			echo_count[term]++;
 			screen_len[term]++;
 		} else if ((ECHO_BUF_SIZE - echo_count[term]) == 3){ // Beep if no room
-			beep(term);
+			if ((ECHO_BUF_SIZE - echo_count[term]) > 0) {
+				echo_buf[term][echo_buf_write_index[term]] = '\7';
+				echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
+				echo_count[term]++;
+			}
 		}
 	}
 
@@ -300,7 +345,11 @@ void ReceiveInterrupt(int term)
 				CondSignal(toRead[term]);
 			}
 		} else if ((ECHO_BUF_SIZE - echo_count[term]) > 3) { // Beep if you're typing when nothing is going in
-			beep(term);
+			if ((ECHO_BUF_SIZE - echo_count[term]) > 0) {
+				echo_buf[term][echo_buf_write_index[term]] = '\7';
+				echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
+				echo_count[term]++;
+			}
 		}
 	}
 
@@ -329,18 +378,6 @@ void ReceiveInterrupt(int term)
 
 }
 
-/*
- * Write Beep on Terminal
- */
-static
-void beep(int term) {
-	if ((ECHO_BUF_SIZE - echo_count[term]) > 0) {
-		echo_buf[term][echo_buf_write_index[term]] = '\7';
-		echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
-		echo_count[term]++;
-	}
-}
-
 
 /*
  * Called by the hardware once each character is written to the 
@@ -351,6 +388,9 @@ void TransmitInterrupt(int term)
 {
 	Declare_Monitor_Entry_Procedure();
 	int i;
+
+	/* Statistics */
+	statistics[term].tty_out++;
 
 	//printf("terminal %d: echo_count = %d, echo_write = %d, echo_read = %d, [%d, %d, %d]\n", term, echo_count[term], echo_buf_write_index[term], echo_buf_read_index[term], echo_buf[term][0], echo_buf[term][1], echo_buf[term][2]);
 	//fflush(stdout);
@@ -364,16 +404,21 @@ void TransmitInterrupt(int term)
 		}
 	}
 
+	/* Echo job is done */
+	if (echo_count[term] == 0)
+		CondSignal(busy_echo[term]);
+
 	/* Keep echoing as long as there is something to echo */
 	if (echo_count[term] > 0) {
 		WriteDataRegister(term, echo_buf[term][echo_buf_read_index[term]]);
 		decrement_echo_count[term] = true;
 		initiate_echo[term] = false;
-
+	
 	/* WriteTerminal stuff */
 	} else if (writeT_buf_count[term] > 0) {
 		writeT_buf_count[term]--;
 		initiate_echo[term] = true;
+		statistics[term].user_in++;
 	
 		/* Keep writing as long as there is something to write */
 		if (writeT_buf_count[term] > 0) {
@@ -382,6 +427,7 @@ void TransmitInterrupt(int term)
 			if (writeT_buf[term][i] == '\n' && writeT_first_newline[term]) {
 				WriteDataRegister(term, '\r');
 				writeT_buf_count[term]++;
+				statistics[term].user_in--;
 				writeT_first_newline[term] = false;
 			} else if (writeT_buf[term][i] == '\n') {
 				WriteDataRegister(term, writeT_buf[term][i]);
