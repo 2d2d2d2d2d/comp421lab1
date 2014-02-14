@@ -54,7 +54,7 @@ getStatistics(void *arg)
 {
     int i;
     while (1) {
-        sleep(3);
+        sleep(1);
         TerminalDriverStatistics(stats);
         printf("Got Stats\n");
         fflush(stdout);

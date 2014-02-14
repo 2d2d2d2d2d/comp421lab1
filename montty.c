@@ -6,7 +6,7 @@
 #include <terminals.h>
 
 /* Constants */
-#define ECHO_BUF_SIZE 1024
+#define ECHO_BUF_SIZE 1024 // Must be at least 2 since one is reserved for \7
 #define INPUT_BUF_SIZE 4096
 
 /* Condition variables to lock */
@@ -37,6 +37,9 @@ int echo_buf_read_index[MAX_NUM_TERMINALS];
 
 /* Boolean to check echo should initiate or not */
 bool initiate_echo[MAX_NUM_TERMINALS];
+
+/* Boolean to check for back spacing */
+bool first_backspace[MAX_NUM_TERMINALS];
 
 /* Keep track of the number of writers */
 int num_writers[MAX_NUM_TERMINALS];
@@ -126,7 +129,7 @@ int WriteTerminal(int term, char *buf, int buflen)
 }
 
 /*
- * 
+ * Stores the input buffer of given length or upto \n, which every is shorter, to the pointer passed in
  */
 extern
 int ReadTerminal(int term, char *buf, int buflen)
@@ -213,6 +216,7 @@ int InitTerminal(int term)
 		echo_buf_write_index[term] = 0;
 		echo_buf_read_index[term] = 0;
 		initiate_echo[term] = true;
+		first_backspace[term] = true;
 		
 		// ReadTerminal
 		num_readers[term] = 0;
@@ -231,7 +235,7 @@ int InitTerminal(int term)
 }
 
 /*
- * 
+ * Initialization needed for the whole terminal
  */
 extern
 int InitTerminalDriver()
@@ -285,36 +289,26 @@ void ReceiveInterrupt(int term)
 	/* Echo buf update */
 	if ((('\b' == c) || ('\177' == c)) && (0 != screen_len[term])) {
 
-		/* Back space only if there's room, else drop the back space. Notice, this won't affect the input buffer */
-		if ((ECHO_BUF_SIZE - echo_count[term]) >= 3) {
+		/* Back space if there's room */
+		if ((ECHO_BUF_SIZE - echo_count[term]) > 0) {
 			echo_buf[term][echo_buf_write_index[term]] = '\b';
 			echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
 			echo_count[term]++;
-
-			echo_buf[term][echo_buf_write_index[term]] = ' ';
-			echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
-			echo_count[term]++;
-
-			echo_buf[term][echo_buf_write_index[term]] = '\b';
-			echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
-			echo_count[term]++;
-
 			screen_len[term]--;
 		}
 
 	} else if (('\b' != c) && ('\177' != c)) {
 
-		/* Echo only if there's room, else drop the character. Notice, this won't even go into the input buffer */
+		/* Echo only if there's room, else drop the character. */
 		if ((ECHO_BUF_SIZE - echo_count[term]) > 1) { // Leave room for beeping
 			echo_buf[term][echo_buf_write_index[term]] = c;
 			echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
 			echo_count[term]++;
 			screen_len[term]++;
 		} else if ((ECHO_BUF_SIZE - echo_count[term]) == 1) { // Beep
-				echo_buf[term][echo_buf_write_index[term]] = '\7';
-				echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
-				echo_count[term]++;
-			}
+			echo_buf[term][echo_buf_write_index[term]] = '\7';
+			echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
+			echo_count[term]++;
 		}
 	}
 
@@ -339,10 +333,9 @@ void ReceiveInterrupt(int term)
 				CondSignal(toRead[term]);
 			}
 		} else if ((ECHO_BUF_SIZE - echo_count[term]) > 0) { // Beep
-				echo_buf[term][echo_buf_write_index[term]] = '\7';
-				echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
-				echo_count[term]++;
-			}
+			echo_buf[term][echo_buf_write_index[term]] = '\7';
+			echo_buf_write_index[term] = (echo_buf_write_index[term] + 1) % ECHO_BUF_SIZE;
+			echo_count[term]++;
 		}
 	}
 
@@ -373,7 +366,8 @@ void TransmitInterrupt(int term)
 	/* Statistics */
 	statistics[term].tty_out++;
 
-	//printf("terminal %d: echo_count = %d, echo_write = %d, echo_read = %d, [%d, %d, %d]\n", term, echo_count[term], echo_buf_write_index[term], echo_buf_read_index[term], echo_buf[term][0], echo_buf[term][1], echo_buf[term][2]);
+	/* Debug */
+	//printf("terminal %d: echo_count = %d, screen_len = %d, echo_write = %d, echo_read = %d, [%d, %d, %d]\n", term, echo_count[term], screen_len[term], echo_buf_write_index[term], echo_buf_read_index[term], echo_buf[term][0], echo_buf[term][1], echo_buf[term][2]);
 	//fflush(stdout);
 
 	/* Something to write from echo */
@@ -381,10 +375,23 @@ void TransmitInterrupt(int term)
 
 	/* Character Processing */
 	if ('\r' == echo_buf[term][prev]) {
-		echo_buf[term][prev] = '\n';
 		WriteDataRegister(term, '\n');
+		echo_buf[term][prev] = '\n';
 		initiate_echo[term] = false;
 		screen_len[term] = 0;
+	}
+
+	else if ('\b' == echo_buf[term][prev]) {
+		if (first_backspace[term]) {
+			WriteDataRegister(term, ' ');
+			first_backspace[term] = false;
+			initiate_echo[term] = false;
+		} else {
+			WriteDataRegister(term, '\b');
+			echo_buf[term][prev] = '\n';
+			first_backspace[term] = true;
+			initiate_echo[term] = false;
+		}
 	}
 
 	/* Keep echoing as long as there is something to echo */
