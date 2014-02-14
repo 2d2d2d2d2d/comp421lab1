@@ -1,3 +1,8 @@
+/*
+ * Test for correct initialization
+ * and error cases
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <threads.h>

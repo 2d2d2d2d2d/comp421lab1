@@ -1,0 +1,27 @@
+Author: Riya Fukui (rf7)
+
+Data Structures, algorithms and things that work/don't work:
+
+	I don't think there's anything particularly unusual about my algorithm.
+
+	WriteTerminal uses 3 condition variables, which might be a little unusual but this was to ensure that one and only one is writing at a time, it does not start writing while the terminal is still echoing, and so that the WriteTerminal blocks until all the writing is finished. WriteTerminal will initiate WriteDataRegister, if and only if nothing is currently writing to the screen.
+
+	ReadTerminal uses 2 condition variables, one to ensure that one and only one is reading at a time and the other is to wait until input buffer is ready to be read.
+
+	I wan't entirely sure what to do with the pointer to array of struct termstat, so I made an internal one that keeps track of everything and copied it over whenever TerminalDriverStatistics was called.
+
+	ReceiveInterrupt will initiate WriteDataRegister, if and only if nothing is currently writing to the screen. The only thing that I think that doesn't work quite right is that, if the user wants to see what's being typed echoed on the screen, then the echo buffer must be at least sizeof(2*char) because one char space is reserved for \7, the bell. I wasn't sure how to produce a bell without any space in the echo buffer, so I said that echo buffer must be at least 2. If you set it to 1, everything else works just fine, only you won't see the text appearing as you type.
+
+	TransmitInterrupt will keep writing to the screen as long as there is something to be written. Once the loop is started, only TransmitInterrupt will call WriteDataRegister.
+
+Tests that I performed:
+
+	test0: Tests two terminals
+	test1~4: Given. Tests initialization, echo and writing
+	test5 : Test for concurrent writing on two terminals
+	test6 : Test for correct reading
+	test7 : Test for concurrent writing (same as test5)
+	test8 : Test for correct reading (same as test6)
+	test9 : Tests for correct initialization and error cases
+	test10 : Tests for 1. correct output from TerminalDriverStatistics(), 2. concurrent writing and queued writing, 3. keyboard stroke and write at the very exact moment.
+	test11 : Testing for multiple terminals and concurrency, by writing on 4 different terminals.

@@ -235,7 +235,7 @@ int InitTerminal(int term)
 }
 
 /*
- * Initialization needed for the whole terminal
+ * Initialization needed for the whole terminalsleep(1);
  */
 extern
 int InitTerminalDriver()

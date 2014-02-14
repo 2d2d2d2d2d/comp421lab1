@@ -1,3 +1,7 @@
+/*
+ * Test for concurrent writing 
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <threads.h>

@@ -1,3 +1,10 @@
+/* 
+ * Tests for 
+ * 1. correct output from TerminalDriverStatistics()
+ * 2. concurrent writing and queued writing
+ * 3. keyboard stroke and write at the very exact moment.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>

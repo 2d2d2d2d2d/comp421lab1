@@ -1,3 +1,7 @@
+/*
+ * Test for correct reading
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
