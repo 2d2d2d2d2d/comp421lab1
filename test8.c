@@ -41,7 +41,7 @@ reader(void *arg)
 {
     char buf1[1];
     while (1) {
-        ReadTerminal(*((int *)arg), buf1, 1);
+        ReadTerminal(*((int *)arg), buf1, 10);
         printf("%s\n", buf1);
         fflush(stdout);
         strcpy(buf1, "");
